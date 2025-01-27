@@ -781,7 +781,9 @@ class LeRobotDataset(torch.utils.data.Dataset):
                 episode_buffer[key] = np.full((episode_length,), task_index)
             ## ryanthecreator : added prestacked key to deal with non singular shape actions / observations
             ## ryanthecreator : added meta str to fix metadata keys
-            elif ft["dtype"] in ["image", "video", "prestacked", "meta_str"]:
+            elif "prestacked" in ft["dtype"]:
+                continue
+            elif ft["dtype"] in ["image", "video"]:
                 continue
             elif len(ft["shape"]) == 1 and ft["shape"][0] == 1:
                 episode_buffer[key] = np.array(episode_buffer[key], dtype=ft["dtype"])
