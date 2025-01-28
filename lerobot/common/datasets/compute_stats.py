@@ -60,7 +60,7 @@ def get_stats_einops_patterns(dataset, num_workers=0):
             _, chunk_length, action_dim = batch[key].shape
             assert chunk_length > 1, f"Expect chunk_length > 1 for prestacked actions, but got {chunk_length}"
             assert action_dim > 0, f"Expect action_dim > 0 for prestacked actions, but got {action_dim}"
-            stats_patterns[key] = "b chunk_length action_dim -> 1 1 action_dim"
+            stats_patterns[key] = "b chunk_length action_dim -> 1 chunk_length action_dim"
         else:
             raise ValueError(f"{key}, {batch[key].shape}")
     return stats_patterns
