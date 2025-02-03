@@ -36,7 +36,6 @@ def get_stats_einops_patterns(dataset, num_workers=0):
     batch = next(iter(dataloader))
 
     stats_patterns = {}
-
     for key in dataset.features:
         # sanity check that tensors are not float64
         assert batch[key].dtype != torch.float64
@@ -57,9 +56,13 @@ def get_stats_einops_patterns(dataset, num_workers=0):
             stats_patterns[key] = "b c -> c "
         elif batch[key].ndim == 1:
             stats_patterns[key] = "b -> 1"
+        elif batch[key].ndim == 3:
+            _, chunk_length, action_dim = batch[key].shape
+            assert chunk_length > 1, f"Expect chunk_length > 1 for prestacked actions, but got {chunk_length}"
+            assert action_dim > 0, f"Expect action_dim > 0 for prestacked actions, but got {action_dim}"
+            stats_patterns[key] = "b chunk_length action_dim -> 1 chunk_length action_dim"
         else:
             raise ValueError(f"{key}, {batch[key].shape}")
-
     return stats_patterns
 
 

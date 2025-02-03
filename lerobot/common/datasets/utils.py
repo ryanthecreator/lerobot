@@ -268,6 +268,8 @@ def get_hf_features_from_features(features: dict) -> datasets.Features:
             continue
         elif ft["dtype"] == "image":
             hf_features[key] = datasets.Image()
+        elif "prestacked" in ft["dtype"]:
+            hf_features[key] = datasets.Array2D(dtype=ft["dtype"].split("_")[-1], shape=ft["shape"])
         elif ft["shape"] == (1,):
             hf_features[key] = datasets.Value(dtype=ft["dtype"])
         else:
