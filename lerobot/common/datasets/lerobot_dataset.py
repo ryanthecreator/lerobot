@@ -27,6 +27,7 @@ import numpy as np
 import PIL.Image
 import torch
 import torch.utils
+import torchvision
 from datasets import load_dataset
 from huggingface_hub import create_repo, snapshot_download, upload_folder
 
@@ -465,6 +466,9 @@ class LeRobotDataset(torch.utils.data.Dataset):
 
         # Available stats implies all videos have been encoded and dataset is iterable
         self.consolidated = self.meta.stats is not None
+        
+        # holds video readers for every episode for every worker
+        self.video_readers = {}
 
     def push_to_hub(
         self,
@@ -629,9 +633,14 @@ class LeRobotDataset(torch.utils.data.Dataset):
         """
         item = {}
         for vid_key, query_ts in query_timestamps.items():
-            video_path = self.root / self.meta.get_video_file_path(ep_idx, vid_key)
+            reader = self.video_readers[(ep_idx, vid_key)]
+            #video_path = self.root / self.meta.get_video_file_path(ep_idx, vid_key)
             frames = decode_video_frames_torchvision(
-                video_path, query_ts, self.tolerance_s, self.video_backend
+                video_path = None, 
+                timestamps=query_ts, 
+                tolerance_s=self.tolerance_s, 
+                backend=self.video_backend,
+                reader=reader
             )
             item[vid_key] = frames.squeeze(0)
 
@@ -646,6 +655,14 @@ class LeRobotDataset(torch.utils.data.Dataset):
         return self.num_frames
 
     def __getitem__(self, idx) -> dict:
+        # initializes the readers if they haven't been initialized already
+        if len(self.video_readers) == 0:
+            torchvision.set_video_backend(self.video_backend)
+            for vid_key in self.meta.video_keys:
+                for ep_idx in range(self.num_episodes):
+                    video_path = self.root / self.meta.get_video_file_path(ep_idx, vid_key)
+                    reader = torchvision.io.VideoReader(str(video_path), "video")
+                    self.video_readers[(ep_idx, vid_key)] = reader
         item = self.hf_dataset[idx]
         ep_idx = item["episode_index"].item()
 
