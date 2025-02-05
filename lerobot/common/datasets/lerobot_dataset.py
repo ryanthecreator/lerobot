@@ -19,6 +19,7 @@ import shutil
 from functools import cached_property
 from pathlib import Path
 from typing import Callable
+import random
 
 from pyarrow.dataset import dataset
 
@@ -71,7 +72,7 @@ from lerobot.common.robot_devices.robots.utils import Robot
 # For maintainers, see lerobot/common/datasets/push_dataset_to_hub/CODEBASE_VERSION.md
 CODEBASE_VERSION = "v2.0"
 LEROBOT_HOME = Path(os.getenv("LEROBOT_HOME", "~/.cache/huggingface/lerobot")).expanduser()
-
+SEED = 42
 
 class LeRobotDatasetMetadata:
     def __init__(
@@ -216,7 +217,7 @@ class LeRobotDatasetMetadata:
         task_index = self.task_to_task_index.get(task, None)
         return task_index if task_index is not None else self.total_tasks
 
-    def save_episode(self, episode_index: int, episode_length: int, task: str, task_index: int) -> None:
+    def save_episode(self, episode_index: int, episode_length: int, task: str, task_index: int, valid_ratio: float = 0.2) -> None:
         self.info["total_episodes"] += 1
         self.info["total_frames"] += episode_length
 
@@ -233,7 +234,9 @@ class LeRobotDatasetMetadata:
         if chunk >= self.total_chunks:
             self.info["total_chunks"] += 1
 
-        self.info["splits"] = {"train": f"0:{self.info['total_episodes']}"}
+        # NOTE: Updates the split once based on valid_ratio during creation
+        self._update_splits(valid_ratio=valid_ratio)
+
         self.info["total_videos"] += len(self.video_keys)
         write_json(self.info, self.root / INFO_PATH)
 
@@ -250,6 +253,32 @@ class LeRobotDatasetMetadata:
         # ep_stats = compute_episode_stats(episode_buffer, self.features, episode_length, image_sampling=image_sampling)
         # ep_stats = serialize_dict(ep_stats)
         # append_jsonlines(ep_stats, self.root / STATS_PATH)
+
+    def _update_splits(self, seed: int = SEED, valid_ratio: float = 0.2) -> None:
+        """
+        Randomly updates `self.info["splits"]` with episode indices.
+
+        Args:
+            seed (int): Seed for reproducibility.
+            valid_ratio (float): Fraction of episodes to assign to the validation set.
+        """
+        total_episodes = self.info.get("total_episodes", 0)
+        
+        if total_episodes == 0:
+            return  # No episodes to split
+
+        all_indices = list(range(total_episodes))
+
+        random.seed(seed)
+        random.shuffle(all_indices)
+
+        valid_size = int(valid_ratio * total_episodes)
+        
+        # Assign indices to train and valid splits
+        self.info["splits"] = {
+            "train": all_indices[valid_size:],
+            "valid": all_indices[:valid_size]
+        }
 
     def write_video_info(self) -> None:
         """
@@ -545,13 +574,13 @@ class LeRobotDataset(torch.utils.data.Dataset):
         """hf_dataset contains all the observations, states, actions, rewards, etc."""
         if self.episodes is None:
             path = str(self.root / "data")
-            hf_dataset = load_dataset("parquet", data_dir=path, split="train")
+            hf_dataset = load_dataset("arrow", data_dir=path, split="train")
         else:
             files = [str(self.root / self.meta.get_data_file_path(ep_idx)) for ep_idx in self.episodes]
-            hf_dataset = load_dataset("parquet", data_files=files, split="train")
+            hf_dataset = load_dataset("arrow", data_files=files, split="train")
 
         # TODO(aliberts): hf_dataset.set_format("torch")
-        hf_dataset = hf_dataset.with_format("arrow")
+        #hf_dataset = hf_dataset.with_format("torch")
 
         hf_dataset.set_transform(hf_transform_to_torch)
 
@@ -738,7 +767,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
 
         self.episode_buffer["size"] += 1
 
-    def save_episode(self, task: str, encode_videos: bool = True, episode_data: dict | None = None) -> None:
+    def save_episode(self, task: str, encode_videos: bool = True, episode_data: dict | None = None, valid_ratio : float = 0.2) -> None:
         """
         This will save to disk the current episode in self.episode_buffer. Note that since it affects files on
         disk, it sets self.consolidated to False to ensure proper consolidation later on before uploading to
@@ -779,10 +808,6 @@ class LeRobotDataset(torch.utils.data.Dataset):
                 episode_buffer[key] = np.full((episode_length,), episode_index)
             elif key == "task_index":
                 episode_buffer[key] = np.full((episode_length,), task_index)
-            ## ryanthecreator : added prestacked key to deal with non singular shape actions / observations
-            ## ryanthecreator : added meta str to fix metadata keys
-            elif "prestacked" in ft["dtype"]:
-                continue
             elif ft["dtype"] in ["image", "video"]:
                 continue
             elif len(ft["shape"]) == 1 and ft["shape"][0] == 1:
@@ -795,7 +820,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
         self._wait_image_writer()
         self._save_episode_table(episode_buffer, episode_index)
 
-        self.meta.save_episode(episode_index, episode_length, task, task_index)
+        self.meta.save_episode(episode_index, episode_length, task, task_index, valid_ratio=valid_ratio)
 
         if encode_videos and len(self.meta.video_keys) > 0:
             video_paths = self.encode_episode_videos(episode_index)
