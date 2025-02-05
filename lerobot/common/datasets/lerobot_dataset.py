@@ -272,7 +272,7 @@ class LeRobotDatasetMetadata:
         random.seed(seed)
         random.shuffle(all_indices)
 
-        valid_size = int(valid_ratio * total_episodes)
+        valid_size = max(1, min(int(valid_ratio * total_episodes), total_episodes - 1))
         
         # Assign indices to train and valid splits
         self.info["splits"] = {
