@@ -256,7 +256,7 @@ class LeRobotDatasetMetadata:
 
     def _update_splits(self, seed: int = SEED, valid_ratio: float = 0.2) -> None:
         """
-        Randomly updates `self.info["splits"]` with episode indices.
+        Updates `self.info["splits"]` with episode indices.
 
         Args:
             seed (int): Seed for reproducibility.
