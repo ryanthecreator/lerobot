@@ -440,7 +440,8 @@ class LeRobotDataset(torch.utils.data.Dataset):
 
         # Unused attributes
         self.image_writer = None
-        self.episode_buffer = None
+        #self.episode_buffer = None
+        self.episode_buffers = {}
 
         self.root.mkdir(exist_ok=True, parents=True)
 
@@ -703,7 +704,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
         else:
             self.image_writer.save_image(image=image, fpath=fpath)
 
-    def add_frame(self, frame: dict) -> None:
+    def add_frame(self, frame: dict, episode_index: int) -> None:
         """
         This function only adds the frame to the episode_buffer. Apart from images — which are written in a
         temporary directory — nothing is written to disk. To save those frames, the 'save_episode()' method
@@ -711,14 +712,17 @@ class LeRobotDataset(torch.utils.data.Dataset):
         """
         # TODO(aliberts, rcadene): Add sanity check for the input, check it's numpy or torch,
         # check the dtype and shape matches, etc.
+        if episode_index not in self.episode_buffers:
+            self.episode_buffers[episode_index] = self.create_episode_buffer(episode_index)
+        
+        buffer = self.episode_buffers[episode_index]
+        # if self.episode_buffer is None:
+        #     self.episode_buffer = self.create_episode_buffer()
 
-        if self.episode_buffer is None:
-            self.episode_buffer = self.create_episode_buffer()
-
-        frame_index = self.episode_buffer["size"]
+        frame_index = buffer["size"]
         timestamp = frame.pop("timestamp") if "timestamp" in frame else frame_index / self.fps
-        self.episode_buffer["frame_index"].append(frame_index)
-        self.episode_buffer["timestamp"].append(timestamp)
+        buffer["frame_index"].append(frame_index)
+        buffer["timestamp"].append(timestamp)
 
         for key in frame:
             if key not in self.features:
@@ -726,19 +730,19 @@ class LeRobotDataset(torch.utils.data.Dataset):
 
             if self.features[key]["dtype"] not in ["image", "video"]:
                 item = frame[key].numpy() if isinstance(frame[key], torch.Tensor) else frame[key]
-                self.episode_buffer[key].append(item)
+                buffer[key].append(item)
             elif self.features[key]["dtype"] in ["image", "video"]:
                 img_path = self._get_image_file_path(
-                    episode_index=self.episode_buffer["episode_index"], image_key=key, frame_index=frame_index
+                    episode_index=buffer["episode_index"], image_key=key, frame_index=frame_index
                 )
                 if frame_index == 0:
                     img_path.parent.mkdir(parents=True, exist_ok=True)
                 self._save_image(frame[key], img_path)
-                self.episode_buffer[key].append(str(img_path))
+                buffer[key].append(str(img_path))
 
-        self.episode_buffer["size"] += 1
+        buffer["size"] += 1
 
-    def save_episode(self, task: str, encode_videos: bool = True, episode_data: dict | None = None) -> None:
+    def save_episode(self, episode_index: int, task: str, encode_videos: bool = True, episode_data: dict | None = None) -> None:
         """
         This will save to disk the current episode in self.episode_buffer. Note that since it affects files on
         disk, it sets self.consolidated to False to ensure proper consolidation later on before uploading to
@@ -748,21 +752,27 @@ class LeRobotDataset(torch.utils.data.Dataset):
         you can do it later with dataset.consolidate(). This is to give more flexibility on when to spend
         time for video encoding.
         """
-        if not episode_data:
-            episode_buffer = self.episode_buffer
+        if episode_index not in self.episode_buffers:
+            raise ValueError(f"Episode {episode_index} does not exist in buffer")
+        
+        episode_buffer = self.episode_buffers.pop(episode_index)
+        
+        # if not episode_data:
+        #     episode_buffer = self.episode_buffer
 
         episode_length = episode_buffer.pop("size")
         episode_index = episode_buffer["episode_index"]
-        if episode_index != self.meta.total_episodes:
-            # TODO(aliberts): Add option to use existing episode_index
-            raise NotImplementedError(
-                "You might have manually provided the episode_buffer with an episode_index that doesn't "
-                "match the total number of episodes in the dataset. This is not supported for now."
-            )
+        
+        # if episode_index != self.meta.total_episodes:
+        #     # TODO(aliberts): Add option to use existing episode_index
+        #     raise NotImplementedError(
+        #         "You might have manually provided the episode_buffer with an episode_index that doesn't "
+        #         "match the total number of episodes in the dataset. This is not supported for now."
+        #     )
 
         if episode_length == 0:
             raise ValueError(
-                "You must add one or several frames with `add_frame` before calling `add_episode`."
+                "You must add one or several frames with `add_frame` before calling `save_episode`."
             )
 
         task_index = self.meta.get_task_index(task)
@@ -802,8 +812,8 @@ class LeRobotDataset(torch.utils.data.Dataset):
             for key in self.meta.video_keys:
                 episode_buffer[key] = video_paths[key]
 
-        if not episode_data:  # Reset the buffer
-            self.episode_buffer = self.create_episode_buffer()
+        # if not episode_data:  # Reset the buffer
+        #     self.episode_buffer = self.create_episode_buffer()
 
         self.consolidated = False
 
@@ -950,6 +960,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
 
         # TODO(aliberts, rcadene, alexander-soare): Merge this with OnlineBuffer/DataBuffer
         obj.episode_buffer = obj.create_episode_buffer()
+        obj.episode_buffers = {}
 
         # This bool indicates that the current LeRobotDataset instance is in sync with the files on disk. It
         # is used to know when certain operations are need (for instance, computing dataset statistics). In
