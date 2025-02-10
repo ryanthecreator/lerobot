@@ -440,7 +440,8 @@ class LeRobotDataset(torch.utils.data.Dataset):
 
         # Unused attributes
         self.image_writer = None
-        #self.episode_buffer = None
+        
+        self.episode_buffer = None
         self.episode_buffers = {}
 
         self.root.mkdir(exist_ok=True, parents=True)
@@ -704,7 +705,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
         else:
             self.image_writer.save_image(image=image, fpath=fpath)
 
-    def add_frame(self, frame: dict, episode_index: int) -> None:
+    def add_frame(self, frame: dict, episode_index: int | None = None) -> None:
         """
         This function only adds the frame to the episode_buffer. Apart from images — which are written in a
         temporary directory — nothing is written to disk. To save those frames, the 'save_episode()' method
@@ -712,13 +713,15 @@ class LeRobotDataset(torch.utils.data.Dataset):
         """
         # TODO(aliberts, rcadene): Add sanity check for the input, check it's numpy or torch,
         # check the dtype and shape matches, etc.
-        if episode_index not in self.episode_buffers:
-            self.episode_buffers[episode_index] = self.create_episode_buffer(episode_index)
-        
-        buffer = self.episode_buffers[episode_index]
-        # if self.episode_buffer is None:
-        #     self.episode_buffer = self.create_episode_buffer()
-
+        if episode_index is not None:
+            if episode_index not in self.episode_buffers:
+                self.episode_buffers[episode_index] = self.create_episode_buffer(episode_index)
+            buffer = self.episode_buffers[episode_index]
+        else:
+            if self.episode_buffer is None:
+                self.episode_buffer = self.create_episode_buffer()
+            buffer = self.episode_buffer
+            
         frame_index = buffer["size"]
         timestamp = frame.pop("timestamp") if "timestamp" in frame else frame_index / self.fps
         buffer["frame_index"].append(frame_index)
@@ -742,7 +745,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
 
         buffer["size"] += 1
 
-    def save_episode(self, episode_index: int, task: str, encode_videos: bool = True, episode_data: dict | None = None) -> None:
+    def save_episode(self, task: str, encode_videos: bool = True, episode_data: dict | None = None, episode_index: int | None = None) -> None:
         """
         This will save to disk the current episode in self.episode_buffer. Note that since it affects files on
         disk, it sets self.consolidated to False to ensure proper consolidation later on before uploading to
@@ -752,23 +755,24 @@ class LeRobotDataset(torch.utils.data.Dataset):
         you can do it later with dataset.consolidate(). This is to give more flexibility on when to spend
         time for video encoding.
         """
-        if episode_index not in self.episode_buffers:
-            raise ValueError(f"Episode {episode_index} does not exist in buffer")
+        if episode_data is not None and episode_index is not None:
+            raise ValueError("[ERROR] At most 1 of episode_data and episode_index can be non-null in LeRobotDataset.save_episode()")
         
-        episode_buffer = self.episode_buffers.pop(episode_index)
-        
-        # if not episode_data:
-        #     episode_buffer = self.episode_buffer
+        if episode_index is not None:
+            if episode_index not in self.episode_buffers:
+                raise ValueError(f"Episode {episode_index} does not exist in buffer")
+            episode_buffer = self.episode_buffers.pop(episode_index)
+        else:
+            episode_buffer = self.episode_buffer
+            # if episode_index != self.meta.total_episodes:
+            #     # TODO(aliberts): Add option to use existing episode_index
+            #     raise NotImplementedError(
+            #         "You might have manually provided the episode_buffer with an episode_index that doesn't "
+            #         "match the total number of episodes in the dataset. This is not supported for now."
+            #     )
 
         episode_length = episode_buffer.pop("size")
         episode_index = episode_buffer["episode_index"]
-        
-        # if episode_index != self.meta.total_episodes:
-        #     # TODO(aliberts): Add option to use existing episode_index
-        #     raise NotImplementedError(
-        #         "You might have manually provided the episode_buffer with an episode_index that doesn't "
-        #         "match the total number of episodes in the dataset. This is not supported for now."
-        #     )
 
         if episode_length == 0:
             raise ValueError(
@@ -812,8 +816,8 @@ class LeRobotDataset(torch.utils.data.Dataset):
             for key in self.meta.video_keys:
                 episode_buffer[key] = video_paths[key]
 
-        # if not episode_data:  # Reset the buffer
-        #     self.episode_buffer = self.create_episode_buffer()
+        if not episode_data:  # Reset the buffer
+            self.episode_buffer = self.create_episode_buffer()
 
         self.consolidated = False
 
